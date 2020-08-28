@@ -82,12 +82,6 @@ protected:
     config_helper_.addConfigModifier([this](envoy::config::bootstrap::v3::Bootstrap& bootstrap) {
       listener_config_.Swap(bootstrap.mutable_static_resources()->mutable_listeners(0));
       listener_config_.set_name(listener_name_);
-      for (auto i = 0; i < listener_config_.filter_chains().size(); i++) {
-        auto* filter_chain = listener_config_.mutable_filter_chains(i);
-        auto* on_demand_configuration = filter_chain->mutable_on_demand_configuration();
-        on_demand_configuration->mutable_rebuild_timeout()->CopyFrom(
-        Protobuf::util::TimeUtil::MillisecondsToDuration(15000));
-      }
       ENVOY_LOG(debug, "inside setupGRPCLDS");
       ENVOY_LOG_MISC(error, "listener config: {}", listener_config_.DebugString());
       bootstrap.mutable_static_resources()->mutable_listeners()->Clear();
