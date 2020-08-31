@@ -82,8 +82,22 @@ protected:
     config_helper_.addConfigModifier([this](envoy::config::bootstrap::v3::Bootstrap& bootstrap) {
       listener_config_.Swap(bootstrap.mutable_static_resources()->mutable_listeners(0));
       listener_config_.set_name(listener_name_);
-      ENVOY_LOG(debug, "inside setupGRPCLDS");
+
+      auto* socket_address_ = listener_config_.mutable_address()->mutable_socket_address();
+      socket_address_->set_port_value(12345); // will not be used
+
+      listener_config_2_ = listener_config_;
+      listener_config_2_.set_name(listener_name_2_);
+
+      // socket_address_2_->set_address("1.2.3.4");
+      for (auto i = 0; i < listener_config_2_.filter_chains().size(); i++) {
+        auto* filter_chain = listener_config_2_.mutable_filter_chains(i);
+        auto* on_demand_configuration = filter_chain->mutable_on_demand_configuration();
+        on_demand_configuration->mutable_rebuild_timeout()->CopyFrom(
+        Protobuf::util::TimeUtil::MillisecondsToDuration(15000));
+      }
       ENVOY_LOG_MISC(error, "listener config: {}", listener_config_.DebugString());
+      ENVOY_LOG_MISC(error, "listener config2: {}", listener_config_2_.DebugString());
       bootstrap.mutable_static_resources()->mutable_listeners()->Clear();
       auto* lds_config_source = bootstrap.mutable_dynamic_resources()->mutable_lds_config();
       lds_config_source->set_resource_api_version(envoy::config::core::v3::ApiVersion::V3);
@@ -212,6 +226,8 @@ protected:
   }
   envoy::config::listener::v3::Listener listener_config_;
   std::string listener_name_{"testing-listener-0"};
+  envoy::config::listener::v3::Listener listener_config_2_;
+  std::string listener_name_2_{"testing-listener-1"};
   std::string route_table_name_{"testing-route-table-0"};
   FakeUpstreamInfo lds_upstream_info_;
   FakeUpstreamInfo rds_upstream_info_;
@@ -297,14 +313,8 @@ INSTANTIATE_TEST_SUITE_P(IpVersionsAndGrpcTypes, ListenerIntegrationTest,
 TEST_P(ListenerIntegrationTest, BasicSuccessWithOnDemandFilterChain) {
   on_server_init_function_ = [&]() {
     createLdsStream();
-    // Make all filter chains of this listener to be built on-demand.
-    for (auto i = 0; i < listener_config_.filter_chains().size(); i++) {
-      auto* filter_chain = listener_config_.mutable_filter_chains(i);
-      auto* on_demand_configuration = filter_chain->mutable_on_demand_configuration();
-      on_demand_configuration->mutable_rebuild_timeout()->CopyFrom(
-      Protobuf::util::TimeUtil::MillisecondsToDuration(15000));
-    }
-    sendLdsResponseV3({MessageUtil::getYamlStringFromMessage(listener_config_)}, "1");
+    sendLdsResponseV3({MessageUtil::getYamlStringFromMessage(listener_config_), 
+                       MessageUtil::getYamlStringFromMessage(listener_config_2_)}, "1");
     createRdsStream(route_table_name_);
   };
   initialize();
@@ -313,8 +323,8 @@ TEST_P(ListenerIntegrationTest, BasicSuccessWithOnDemandFilterChain) {
   // testing-listener-0 is not initialized as we haven't pushed any RDS yet.
   EXPECT_EQ(test_server_->server().initManager().state(), Init::Manager::State::Initializing);
   // Workers not started, the LDS added listener 0 is in active_listeners_ list.
-  EXPECT_EQ(test_server_->server().listenerManager().listeners().size(), 1);
-  registerTestServerPorts({listener_name_});
+  EXPECT_EQ(test_server_->server().listenerManager().listeners().size(), 2);
+  registerTestServerPorts({listener_name_, listener_name_2_});
 
   const std::string route_config_tmpl = R"EOF(
       name: {}
@@ -336,7 +346,7 @@ TEST_P(ListenerIntegrationTest, BasicSuccessWithOnDemandFilterChain) {
   test_server_->waitForCounterGe("listener_manager.listener_create_success", 1);
   // Request is sent to cluster_0.
 
-  codec_client_ = makeHttpConnection(lookupPort(listener_name_));
+  codec_client_ = makeHttpConnection(lookupPort(listener_name_2_));
   int response_size = 800;
   int request_size = 10;
   Http::TestResponseHeaderMapImpl response_headers{{":status", "200"},
